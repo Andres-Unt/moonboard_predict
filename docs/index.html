@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+
+<body>
+    <div class="content">
+        <div class="left-panel">
+            <canvas id="board"></canvas>
+        </div>
+        <div class="right-panel">
+            <div id="selection">Selected: </div>
+            <div id="prediction">Grade: </div>
+        </div>
+        <script src="index.js"></script>
+        <script>
+            const canvas = document.getElementById('board');
+            const targetVW = 0.8;
+
+            function applyScale() {
+                const scale = (window.innerWidth * targetVW) / canvas.width;
+                canvas.style.transform = `scale(${scale})`;
+                canvas.style.transformOrigin = 'top left';
+            }
+
+            window.addEventListener('resize', applyScale);
+            document.addEventListener('DOMContentLoaded', applyScale);
+            setTimeout(applyScale, 100);
+            setTimeout(applyScale, 1000);
+        </script>
+    </div>
+</body>
+<style>
+    body {
+        overflow: hidden;
+    }
+
+    .content {
+        display: flex;
+        width: 100vw;
+        height: 100vh;
+        gap: 5px;
+        overflow: hidden;
+    }
+
+    .right-panel {
+        display: flex;
+        flex-direction: column;
+        width: 20vw;
+    }
+
+    .left-panel {
+        overflow-y: auto;
+        overflow-x: hidden;
+        width: 80vw;
+    }
+</style>
+
+</html>

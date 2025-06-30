@@ -90,7 +90,7 @@ export async function runTest() {
     console.log('Initializing model load and test');
     const model = await loadModel();
     console.log('Model loaded');
-    const sample = ['B18', 'F6S', 'D18T'];
+    const sample = ['C16', 'D18t', 'E13', 'F18T', 'F5s', 'f8', 'H10', 'h5s', 'i7', 'j11', 'K4'];
     const x = encodeHolds(sample);
     console.log('Input tensor shape:', x.shape);
     const p = (await model.predict(x).array())[0][0];

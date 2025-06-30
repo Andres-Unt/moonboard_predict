@@ -82,6 +82,9 @@ export async function initUI() {
                 const label = GFONT[index];
                 document.getElementById('prediction').textContent = `Grade: ${label} (${prediction.toFixed(2)})`;
             }
+            else {
+                document.getElementById('prediction').textContent = ``;
+            }
         }
     });
 

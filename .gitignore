@@ -1,1 +1,6 @@
 node_modules
+*~
+*.npy
+*.pyc
+*/*.pyc
+ai_model_and_pygame/moonboard_data.json

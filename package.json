@@ -1,0 +1,16 @@
+{
+  "name": "moonboard-web",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --outdir=public --minify",
+    "serve": "cd public && python -m http.server 8000"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "npyjs": "^0.7.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.18.0"
+  }
+}

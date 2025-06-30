@@ -100,3 +100,5 @@ export async function runTest() {
 }
 
 runTest();
+import { initUI } from './ui.js';
+initUI();

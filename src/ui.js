@@ -1,8 +1,11 @@
 import { loadModel, encodeHolds } from './index.js';
+import { GFONT } from './maps.js';
 
 export async function initUI() {
     const resp = await fetch('ui_map.json');
     const ui = await resp.json();
+    ui.m_left -= 140;
+    ui.m_top -= 120;
     console.log('UI config:', ui);
     const img = new Image();
     img.src = 'moon.png';
@@ -11,7 +14,7 @@ export async function initUI() {
     const canvas = document.getElementById('board');
     const ctx = canvas.getContext('2d');
     // size canvas to image+padding
-    canvas.width = ui.W + ui.m_left + 200;
+    canvas.width = ui.W + ui.m_left;
     canvas.height = ui.H + ui.m_top;
 
     const selected = {};  // lab -> state
@@ -21,6 +24,7 @@ export async function initUI() {
         return name;
     }
 
+    const RAD = 35;
 
     function render() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -28,16 +32,16 @@ export async function initUI() {
         ctx.drawImage(img, ui.m_left, ui.m_top);
         // draw outlines
         Object.entries(selected).forEach(([lab, state]) => {
-            // const mask = ui.labelsMap[lab]; // you'll need to export per-pixel mask or polygon
-            // for simplicity: draw a small circle at comp_center
             const [x, y] = ui.comp_center[lab];
             const sx = ui.m_left + x;
             const sy = ui.m_top + y;
             ctx.beginPath();
-            ctx.arc(sx, sy, 8, 0, 2 * Math.PI);
-            ctx.fillStyle = state === 'start' ? 'green' : state === 'top' ? 'red' : 'blue';
-            ctx.fill();
+            ctx.arc(sx, sy, RAD, 0, 2 * Math.PI);
+            ctx.lineWidth = 10;
+            ctx.strokeStyle = state === 'start' ? 'green' : state === 'top' ? 'red' : 'blue';
+            ctx.stroke();
         });
+
         // draw row/col labels similarly...
         // draw selection text
         const names = Object.entries(selected)
@@ -54,7 +58,7 @@ export async function initUI() {
         for (const [lab, [x, y]] of Object.entries(ui.comp_center)) {
             const dx = mx - x, dy = my - y;
             const d = dx * dx + dy * dy;
-            if (d < dist && d < 100) { dist = d; picked = lab; }
+            if (d < dist && d < RAD * RAD) { dist = d; picked = lab; }
         }
         if (picked) {
             // cycle state exactly as your Pygame code does
@@ -72,10 +76,11 @@ export async function initUI() {
             const names = Object.entries(selected)
                 .map(([lab, s]) => suffix(ui.lab_to_name[lab], s));
             if (names.length) {
-                const { label } = await loadModel().then(m => ({
-                    label: m.predict(encodeHolds(names)).arraySync()[0][0]
-                }));
-                document.getElementById('prediction').textContent = 'Grade: ' + label;
+                const model = await loadModel();
+                const prediction = model.predict(encodeHolds(names)).arraySync()[0][0];
+                const index = Math.round(Math.max(0, Math.min(prediction, GFONT.length - 1)));
+                const label = GFONT[index];
+                document.getElementById('prediction').textContent = `Grade: ${label} (${prediction.toFixed(2)})`;
             }
         }
     });

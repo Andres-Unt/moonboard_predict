@@ -12,13 +12,11 @@
         <script>
             const canvas = document.getElementById('board');
             const targetVW = 1.0;
-
             function applyScale() {
                 const scale = (window.innerWidth * targetVW) / canvas.width;
                 canvas.style.transform = `scale(${scale})`;
                 canvas.style.transformOrigin = 'top left';
             }
-
             window.addEventListener('resize', applyScale);
             document.addEventListener('DOMContentLoaded', applyScale);
             setTimeout(applyScale, 100);
@@ -39,13 +37,17 @@
         overflow-y: auto;
     }
 
+    #selection {
+        visibility: hidden;
+    }
+
     canvas#board {
         display: block;
     }
 
     #overlay {
         position: absolute;
-        top: 0;
+        top: 30px;
         left: 0;
         color: white;
         opacity: 0.5;
@@ -54,6 +56,17 @@
         font-family: sans-serif;
         font-weight: bold;
         text-shadow: 2px 2px 4px #000;
+    }
+
+    /* Mobile styles */
+    @media (max-width: 768px) {
+        #overlay {
+            top: auto;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+        }
     }
 </style>
 

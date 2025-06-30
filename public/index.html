@@ -11,14 +11,15 @@
         </div>
         <script src="index.js"></script>
         <script>
-            const canvas = document.getElementById('board');
             const targetVW = 1.0;
             function applyScale() {
-                const scale = (window.innerWidth * targetVW) / canvas.width;
+                const canvas = document.getElementById('board');
+                let scale = (window.innerWidth * targetVW) / canvas.clientWidth;
+                // console.log('devicePixelRatio', window.devicePixelRatio);
                 canvas.style.transform = `scale(${scale})`;
                 canvas.style.transformOrigin = 'top left';
             }
-            window.addEventListener('resize', applyScale);
+            // window.addEventListener('resize', applyScale);
             document.addEventListener('DOMContentLoaded', applyScale);
             setTimeout(applyScale, 100);
             setTimeout(applyScale, 1000);

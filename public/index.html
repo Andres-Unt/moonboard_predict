@@ -3,17 +3,15 @@
 
 <body>
     <div class="content">
-        <div class="left-panel">
-            <canvas id="board"></canvas>
-        </div>
-        <div class="right-panel">
+        <canvas id="board"></canvas>
+        <div id="overlay">
             <div id="selection">Selected: </div>
             <div id="prediction">Grade: </div>
         </div>
         <script src="index.js"></script>
         <script>
             const canvas = document.getElementById('board');
-            const targetVW = 0.8;
+            const targetVW = 1.0;
 
             function applyScale() {
                 const scale = (window.innerWidth * targetVW) / canvas.width;
@@ -31,26 +29,31 @@
 <style>
     body {
         overflow: hidden;
+        margin: 0;
     }
 
     .content {
-        display: flex;
         width: 100vw;
         height: 100vh;
-        gap: 5px;
-        overflow: hidden;
-    }
-
-    .right-panel {
-        display: flex;
-        flex-direction: column;
-        width: 20vw;
-    }
-
-    .left-panel {
-        overflow-y: auto;
         overflow-x: hidden;
-        width: 80vw;
+        overflow-y: auto;
+    }
+
+    canvas#board {
+        display: block;
+    }
+
+    #overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        color: white;
+        opacity: 0.5;
+        font-size: 32px;
+        pointer-events: none;
+        font-family: sans-serif;
+        font-weight: bold;
+        text-shadow: 2px 2px 4px #000;
     }
 </style>
 

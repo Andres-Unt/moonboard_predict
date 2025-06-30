@@ -76,7 +76,7 @@ export async function loadModel() {
         if (!layer || count === 0) continue;
         const weights = [];
         for (let j = 0; j < count; j++) {
-            const { data, shape } = await npy.load(`weights/layer_${idx}_weight_${j}.npy`);
+            const { data, shape } = await npy.load(`weights/layer_${idx}_weight_${j}.npy.txt`);
             weights.push(tf.tensor(data, shape, 'float32'));
         }
         layer.setWeights(weights);

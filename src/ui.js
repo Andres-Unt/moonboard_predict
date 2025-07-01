@@ -76,7 +76,7 @@ export async function initUI() {
             const names = Object.entries(selected)
                 .map(([lab, s]) => suffix(ui.lab_to_name[lab], s));
             if (names.length) {
-                const model = await loadModel();
+                const model = await loadModel(275);
                 const prediction = model.predict(encodeHolds(names)).arraySync()[0][0];
                 const index = Math.round(Math.max(0, Math.min(prediction, GFONT.length - 1)));
                 const label = GFONT[index];

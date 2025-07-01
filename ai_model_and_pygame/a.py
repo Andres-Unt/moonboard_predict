@@ -77,7 +77,7 @@ def load_and_preprocess(path='moonboard_data.json'):
 
     # Augmentation with counters
     aug_X, aug_y, aug_f = [], [], []
-    cnt_rem1 = cnt_rem2 = cnt_rem3 = cnt_add = 0
+    cnt_rem1 = cnt_rem2 = cnt_rem3 = cnt_rem4 = cnt_add = 0
     L_main = len(dims_main)
     L_start = len(dims_start)
     L_end = len(dims_end)
@@ -102,14 +102,18 @@ def load_and_preprocess(path='moonboard_data.json'):
             x2 = xi.copy(); x2[a] = x2[b] = x2[c] = 0
             aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
             cnt_rem3 += 1
+        for a,b,c,d in combinations(nonse,4):
+            x2 = xi.copy(); x2[a] = x2[b] = x2[c] = x2[d] = 0
+            aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
+            cnt_rem4 += 1
         absent = [i for i,v in enumerate(main) if not v]
         for k in absent:
-            if random.random() < 0.216:
+            if random.random() < 0.34:
                 x2 = xi.copy(); x2[k] = 1
                 aug_X.append(x2); aug_y.append(yi); aug_f.append(-1)
                 cnt_add += 1
     cnt_rem = cnt_rem1 + cnt_rem2 + cnt_rem3
-    print(f"Augmentation stats: removals of 1 hold: {cnt_rem1}, 2 holds: {cnt_rem2}, 3 holds: {cnt_rem3}, additions: {cnt_add}")
+    print(f"Augmentation stats: removals of 1 hold: {cnt_rem1}, 2 holds: {cnt_rem2}, 3 holds: {cnt_rem3}, 4 holds {cnt_rem4}, additions: {cnt_add}")
     print(f"Total removals: {cnt_rem}, additions: {cnt_add}")
     print(f"Augmented: {len(aug_X)} samples, train before {len(X_tr)}, after {len(X_tr)+len(aug_X)}")
 
@@ -148,13 +152,7 @@ class MoonModel(nn.Module):
         super().__init__()
         self.noise = GaussianNoise(0.05)
         layers = []
-        # layers.append(nn.Linear(input_dim, 2048))
-        # layers.append(nn.ReLU())
-        # layers.append(nn.Dropout(0.3))
         M = 512
-        # layers.append(nn.Linear(2048, M))
-        # layers.append(nn.ReLU())
-        # layers.append(nn.Dropout(0.3))
         dim = input_dim
         for _ in range(2):
             layers.append(nn.Linear(dim, M))
@@ -172,9 +170,10 @@ def one_sided_loss(y_true, y_pred):
     grade = y_true[:,0]
     flag = y_true[:,1]
     err = y_pred - grade
-    loss_rem = torch.square(torch.clamp(err, min=0.0))
-    loss_add = torch.square(torch.clamp(-err, min=0.0))
-    loss_orig = torch.square(err)
+    w = 0.1
+    loss_rem = torch.square(torch.clamp(err, min=0.0)) * w
+    loss_add = torch.square(torch.clamp(-err, min=0.0)) * w
+    loss_orig = torch.square(err) 
     loss = torch.where(flag<0, loss_rem, torch.where(flag>0, loss_add, loss_orig))
     return loss.mean()
 

@@ -4,7 +4,7 @@ export const MAIN_DIMS = Array.from({ length: 11 }, (_, c) =>
 export const START_DIMS = Array.from({ length: 11 }, (_, c) =>
     Array.from({ length: 6 }, (_, r) => `${String.fromCharCode(65 + c)}${r + 1}`)
 ).flat();
-export const END_DIMS = Array.from({ length: 13 }, (_, c) =>
+export const END_DIMS = Array.from({ length: 11 }, (_, c) =>
     `${String.fromCharCode(65 + c)}18`
 );
 

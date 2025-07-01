@@ -1,161 +1,256 @@
 import json
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import layers, models, callbacks, regularizers
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import mean_squared_error
-import matplotlib.pyplot as plt
-import keras_tuner as kt
+import random
 from itertools import combinations
+print(torch.cuda.is_available(), torch.__version__)
+device = torch.device('cuda')
+dims_main = [f"{chr(65+c)}{r}" for c in range(11) for r in range(1,19)]
+dims_start = [f"{chr(65+c)}{r}" for c in range(11) for r in range(1,7)]
+dims_end = [f"{chr(65+c)}18" for c in range(11)]
+pos2i_main = {p:i for i,p in enumerate(dims_main)}
+pos2i_start = {p:i for i,p in enumerate(dims_start)}
+pos2i_end = {p:i for i,p in enumerate(dims_end)}
 
-# 1. Load data
-with open('moonboard_data.json','r') as f:
-    raw = json.load(f)['data']
+def load_and_preprocess(path='moonboard_data.json'):
+    # Load raw JSON
+    with open(path, 'r') as f:
+        raw = json.load(f)['data']
 
-# 2. Grade mapping
-gfont = ['6A+','6B','6B+','6C','6C+',
-         '7A','7A+','7B','7B+','7C',
-         '7C+', '8A','8A+','8B','8B+']
-grade_to_int = {g:i for i,g in enumerate(gfont)}
-int_to_grade = {i:g for g,i in grade_to_int.items()}
+    # Grade mappings
+    gfont = ['6A+','6B','6B+','6C','6C+',
+             '7A','7A+','7B','7B+','7C',
+             '7C+', '8A','8A+','8B','8B+']
+    grade_to_int = {g:i for i,g in enumerate(gfont)}
+    int_to_grade = {i:g for g,i in grade_to_int.items()}
 
-# 3. Clean & filter
-filtered=[]; discard={'method':0,'ug_null':0,'ug_invalid':0,'reps_low':0,'grade_mismatch':0,'start_invalid':0,'no_start_or_end':0}
-for e in raw:
-    if e.get('method')!='Feet follow hands': discard['method']+=1; continue
-    ug=e.get('userGrade');
-    if ug is None: discard['ug_null']+=1; continue
-    ug=ug.upper()
-    if ug not in grade_to_int: discard['ug_invalid']+=1; continue
-    if e.get('grade') is None or e['grade'].upper()!=ug: discard['grade_mismatch']+=1; continue
-    if e.get('repeats',0)<10: discard['reps_low']+=1; continue
-    has_s,has_e,valid_s=False,False,True
-    for m in e['moves']:
-        if m.get('isStart'):
-            has_s=True;
-            d=m['description']
-            if not (d[0] in 'ABCDEFGHIJK' and 1<=int(d[1:])<=6): valid_s=False
-        if m.get('isEnd'): has_e=True
-    if not has_s or not has_e: discard['no_start_or_end']+=1; continue
-    if not valid_s: discard['start_invalid']+=1; continue
-    filtered.append(e)
-print(f"Kept {len(filtered)}/{len(raw)} routes. Discards: {discard}")
+    # Filter
+    filtered = []
+    for e in raw:
+        if e.get('method')!='Feet follow hands': continue
+        ug = e.get('userGrade')
+        if ug is None: continue
+        ug = ug.upper()
+        if ug not in grade_to_int: continue
+        if e.get('grade') is None or e['grade'].upper()!=ug: continue
+        if e.get('repeats',0) < 10: continue
+        has_s = has_e = False
+        valid_s = True
+        for m in e['moves']:
+            if m.get('isStart'):
+                has_s = True
+                d = m['description']
+                if not (d[0] in 'ABCDEFGHIJK' and 1<=int(d[1:])<=6): valid_s = False
+            if m.get('isEnd'): has_e=True
+        if not (has_s and has_e and valid_s): continue
+        filtered.append(e)
 
-# 4. Encode holds
-dims_main=[f"{chr(65+c)}{r}" for c in range(11) for r in range(1,19)]
-dims_start=[f"{chr(65+c)}{r}" for c in range(11) for r in range(1,7)]
-dims_end=[f"{chr(65+c)}18" for c in range(11)]
-pos2i_main={p:i for i,p in enumerate(dims_main)}
-pos2i_start={p:i for i,p in enumerate(dims_start)}
-pos2i_end={p:i for i,p in enumerate(dims_end)}
-N=len(filtered)
-X_main=np.zeros((N,len(dims_main)),np.float32)
-X_start=np.zeros((N,len(dims_start)),np.float32)
-X_end=np.zeros((N,len(dims_end)),np.float32)
-y=np.zeros((N,),np.float32)
-for i,e in enumerate(filtered):
-    for m in e['moves']:
-        d=m['description']
-        if d in pos2i_main: X_main[i,pos2i_main[d]]=1
-        if m.get('isStart') and d in pos2i_start: X_start[i,pos2i_start[d]]=1
-        if m.get('isEnd') and d in pos2i_end: X_end[i,pos2i_end[d]]=1
-    y[i]=grade_to_int[e['userGrade'].upper()]
-X_all=np.concatenate([X_main,X_start,X_end],axis=1)
+    # Encode holds
 
-# 5. Split
-idx=np.random.permutation(N)
-s=int(0.8*N)
-train_idx,val_idx=idx[:s],idx[s:]
-X_tr,X_val=X_all[train_idx],X_all[val_idx]
-y_tr,y_val=y[train_idx],y[val_idx]
+    N = len(filtered)
+    X_main = np.zeros((N,len(dims_main)),np.float32)
+    X_start = np.zeros((N,len(dims_start)),np.float32)
+    X_end = np.zeros((N,len(dims_end)),np.float32)
+    y = np.zeros((N,),np.float32)
 
-# 5b. Augment training data with flags
-# flag: 0=orig, -1=removal, +1=addition
-aug_X=[]; aug_y=[]; aug_f=[]
-cnt_prev = len(X_tr)
-cnt_rem1 = cnt_rem2 = cnt_rem3 = cnt_add = 0
-for xi,yi in zip(X_tr,y_tr):
-    main=xi[:len(dims_main)]
-    st=xi[len(dims_main):len(dims_main)+len(dims_start)]
-    en=xi[-len(dims_end):]
-    start_idxs=[pos2i_main[p] for p,i in pos2i_start.items() if st[i]]
-    end_idxs=[pos2i_main[p] for p,i in pos2i_end.items() if en[i]]
-    nonse=[i for i,v in enumerate(main) if v and i not in start_idxs+end_idxs]
-    for k in nonse:
-        x2=xi.copy(); x2[k]=0; aug_X.append(x2); aug_y.append(yi); aug_f.append(-1)
-        cnt_rem1 += 1
-    for a,b in combinations(nonse,2):
-        x2=xi.copy(); x2[a]=x2[b]=0; aug_X.append(x2); aug_y.append(yi); aug_f.append(-1)
-        cnt_rem2 += 1
-    for a,b,c in combinations(nonse,3):
-        x2=xi.copy(); x2[a]=x2[b]=x2[c]=0; aug_X.append(x2); aug_y.append(yi); aug_f.append(-1)
-        cnt_rem3 += 1
-    absent=[i for i,v in enumerate(main) if not v]
-    for k in absent:
-        if np.random.random() < 0.216:# random chance to skip addition
-            x2=xi.copy(); x2[k]=1; aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
-            cnt_add += 1
-# original samples
-orig_X=list(X_tr); orig_y=list(y_tr); orig_f=[0]*len(y_tr)
-# combine
-X_tr_aug=np.array(orig_X+aug_X,dtype=np.float32)
-y_tr_aug=np.vstack([orig_y+aug_y, orig_f+aug_f]).T
-# print augmentation stats
-cnt_rem = cnt_rem1 + cnt_rem2 + cnt_rem3
-print(f"Augmentation stats: removals of 1 hold: {cnt_rem1}, 2 holds: {cnt_rem2}, 3 holds: {cnt_rem3}, additions: {cnt_add}")
-print(f"Total removals: {cnt_rem}, additions: {cnt_add}")
-print(f"Augmented: {len(aug_X)} samples, train now {X_tr_aug.shape[0]}")
+    for i,e in enumerate(filtered):
+        for m in e['moves']:
+            d = m['description']
+            if d in pos2i_main: X_main[i,pos2i_main[d]] = 1
+            if m.get('isStart') and d in pos2i_start: X_start[i,pos2i_start[d]] = 1
+            if m.get('isEnd') and d in pos2i_end: X_end[i,pos2i_end[d]] = 1
+        y[i] = grade_to_int[e['userGrade'].upper()]
 
-# build train/val tensors
-X_train=X_tr_aug; y_train=y_tr_aug
-# for validation, flag=0
-y_val_aug=np.vstack([y_val, np.zeros_like(y_val)]).T
+    X_all = np.concatenate([X_main, X_start, X_end], axis=1)
 
-# 6. Custom one-sided loss
-def one_sided_loss(y_true,y_pred):
-    grade=y_true[:,0]; flag=y_true[:,1]
-    err=y_pred[:,0]-grade
-    loss_rem=tf.square(tf.maximum(err,0.))
-    loss_add=tf.square(tf.maximum(-err,0.))
-    loss_orig=tf.square(err)
-    loss=tf.where(flag<0, loss_rem, tf.where(flag>0, loss_add, loss_orig))
-    return tf.reduce_mean(loss)
+    # Split train/val
+    idx = np.random.permutation(N)
+    s = int(0.8 * N)
+    train_idx, val_idx = idx[:s], idx[s:]
+    X_tr, X_val = X_all[train_idx], X_all[val_idx]
+    y_tr, y_val = y[train_idx], y[val_idx]
 
-# 7. Hyperparameter tuning
-def build_model():
-    m=models.Sequential()
-    m.add(layers.Input(shape=(X_train.shape[1],)))
-    m.add(layers.GaussianNoise(0.05))
-    for i in range(5):
-        m.add(layers.Dense(1024,activation='relu',kernel_regularizer=regularizers.l2(3e-6)))
-        m.add(layers.Dropout(0.3))
-    m.add(layers.Dense(15))
-    m.add(layers.Dense(1))
-    m.compile('adam',loss=one_sided_loss)
-    return m
+    # Augmentation with counters
+    aug_X, aug_y, aug_f = [], [], []
+    cnt_rem1 = cnt_rem2 = cnt_rem3 = cnt_add = 0
+    L_main = len(dims_main)
+    L_start = len(dims_start)
+    L_end = len(dims_end)
+    for xi, yi in zip(X_tr, y_tr):
+        main = xi[:L_main]
+        st = xi[L_main:L_main+L_start]
+        en = xi[-L_end:]
+        start_idxs = [pos2i_main[p] for p,i in pos2i_start.items() if st[i]]
+        end_idxs = [pos2i_main[p] for p,i in pos2i_end.items() if en[i]]
+        nonse = [i for i,v in enumerate(main) if v and i not in start_idxs+end_idxs]
+        for k in nonse:
+            # print('xi',xi)
+            x2 = xi.copy(); x2[k] = 0
+            # print('x2',x2)
+            aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
+            cnt_rem1 += 1
+        for a,b in combinations(nonse,2):
+            x2 = xi.copy(); x2[a] = x2[b] = 0
+            aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
+            cnt_rem2 += 1
+        for a,b,c in combinations(nonse,3):
+            x2 = xi.copy(); x2[a] = x2[b] = x2[c] = 0
+            aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
+            cnt_rem3 += 1
+        absent = [i for i,v in enumerate(main) if not v]
+        for k in absent:
+            if random.random() < 0.216:
+                x2 = xi.copy(); x2[k] = 1
+                aug_X.append(x2); aug_y.append(yi); aug_f.append(-1)
+                cnt_add += 1
+    cnt_rem = cnt_rem1 + cnt_rem2 + cnt_rem3
+    print(f"Augmentation stats: removals of 1 hold: {cnt_rem1}, 2 holds: {cnt_rem2}, 3 holds: {cnt_rem3}, additions: {cnt_add}")
+    print(f"Total removals: {cnt_rem}, additions: {cnt_add}")
+    print(f"Augmented: {len(aug_X)} samples, train before {len(X_tr)}, after {len(X_tr)+len(aug_X)}")
 
-stop=callbacks.EarlyStopping(monitor='val_loss',patience=5)
+    # original
+    orig_X = list(X_tr)
+    orig_y = list(y_tr)
+    orig_f = [0]*len(y_tr)
+    # combine
+    X_train = np.array(orig_X + aug_X, dtype=np.float32)
+    y_train = np.vstack([orig_y + aug_y, orig_f + aug_f]).T.astype(np.float32)
+    y_val_aug = np.vstack([y_val, np.zeros_like(y_val)]).T.astype(np.float32)
 
-# 8. Train final
-# best=tuner.get_best_hyperparameters(1)[0]
-model=build_model()
-hist=model.fit(X_train,y_train,validation_data=(X_val,y_val_aug),epochs=10000,batch_size=128,callbacks=[callbacks.EarlyStopping('val_loss',patience=100,restore_best_weights=True)],verbose=2)
-model.save('moonboard_model.keras')
+    return X_train, y_train, X_val, y_val_aug, y_val, int_to_grade
 
-# 9. Evaluate
-preds=model.predict(X_val).flatten()
-# use linear error for reporting
-idx=np.clip(np.rint(preds),0,len(gfont)-1).astype(int)
-mse=mean_squared_error(y_val, preds)
-print(f"MSE: {mse:.3f}")
-print(f"Exact: {np.mean(idx==y_val)*100:.1f}% Off1: {np.mean(np.abs(idx-y_val)<=1)*100:.1f}%")
-print(f"off2: {np.mean(np.abs(idx-y_val)<=2)*100:.1f}% Off3: {np.mean(np.abs(idx-y_val)<=3)*100:.1f}%")
+class MoonboardDataset(Dataset):
+    def __init__(self, X, y):
+        self.X = torch.from_numpy(X)
+        self.y = torch.from_numpy(y)
+    def __len__(self):
+        return len(self.X)
+    def __getitem__(self, idx):
+        return self.X[idx], self.y[idx]
 
-# 10. Prediction helper
-def predict_route(moves):
-    vec=np.zeros((1,X_train.shape[1]),dtype=np.float32)
+class GaussianNoise(nn.Module):
+    def __init__(self, sigma=0.05):
+        super().__init__()
+        self.sigma = sigma
+    def forward(self, x):
+        if self.training:
+            noise = torch.randn_like(x) * self.sigma
+            return x + noise
+        return x
+
+class MoonModel(nn.Module):
+    def __init__(self, input_dim):
+        super().__init__()
+        self.noise = GaussianNoise(0.05)
+        layers = []
+        # layers.append(nn.Linear(input_dim, 2048))
+        # layers.append(nn.ReLU())
+        # layers.append(nn.Dropout(0.3))
+        M = 512
+        # layers.append(nn.Linear(2048, M))
+        # layers.append(nn.ReLU())
+        # layers.append(nn.Dropout(0.3))
+        dim = input_dim
+        for _ in range(2):
+            layers.append(nn.Linear(dim, M))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(0.3))
+            dim = M 
+        layers.append(nn.Linear(dim, 15))
+        layers.append(nn.Linear(15, 1))
+        self.net = nn.Sequential(self.noise, *layers)
+
+    def forward(self, x):
+        return self.net(x).squeeze(1)
+
+def one_sided_loss(y_true, y_pred):
+    grade = y_true[:,0]
+    flag = y_true[:,1]
+    err = y_pred - grade
+    loss_rem = torch.square(torch.clamp(err, min=0.0))
+    loss_add = torch.square(torch.clamp(-err, min=0.0))
+    loss_orig = torch.square(err)
+    loss = torch.where(flag<0, loss_rem, torch.where(flag>0, loss_add, loss_orig))
+    return loss.mean()
+
+# Training loop
+def train():
+    X_train, y_train, X_val, y_val_aug, y_val, int_to_grade = load_and_preprocess()
+    train_ds = MoonboardDataset(X_train, y_train)
+    val_ds = MoonboardDataset(X_val, y_val_aug)
+    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+    val_loader = DataLoader(val_ds, batch_size=256)
+
+    model = MoonModel(X_train.shape[1]).to(device)
+    optimizer = optim.Adam(model.parameters())
+
+    best_loss = float('inf')
+    patience, wait = 10, 0
+    for epoch in range(1, 1001):
+        model.train()
+        for xb, yb in train_loader:
+            xb, yb = xb.to(device), yb.to(device)
+            optimizer.zero_grad()
+            preds = model(xb)
+            loss = one_sided_loss(yb, preds)
+            loss.backward()
+            optimizer.step()
+
+        # validation
+        model.eval()
+        val_losses = []
+        with torch.no_grad():
+            for xb, yb in val_loader:
+                xb, yb = xb.to(device), yb.to(device)
+                preds = model(xb)
+                val_losses.append(one_sided_loss(yb, preds).item())
+        avg_val = np.mean(val_losses)
+        if avg_val < best_loss:
+            best_loss = avg_val; best_model = model.state_dict(); wait = 0
+            torch.save(model.state_dict(), 'moonboard_model.pth')
+        else:
+            wait += 1
+            if wait >= patience:
+                print(f"Early stopping at epoch {epoch}")
+                break
+        print(f"Epoch {epoch}, Val Loss: {avg_val:.4f}")
+
+    # load best
+    model.load_state_dict(best_model)
+    torch.save(model.state_dict(), 'moonboard_model.pth')
+
+    # evaluate
+    model.eval()
+    Xv = torch.from_numpy(X_val).to(device)
+    with torch.no_grad():
+        preds = model(Xv).cpu().numpy()
+    mse = mean_squared_error(y_val, preds)
+    idx = np.clip(np.rint(preds).astype(int), 0, len(int_to_grade)-1)
+    print(f"MSE: {mse:.3f}")
+    print(f"Exact: {np.mean(idx==y_val)*100:.1f}%")
+    for d in [1,2,3]:
+        print(f"Off{d}: {np.mean(np.abs(idx-y_val)<=d)*100:.1f}%")
+
+# prediction helper
+def predict_route(moves, model, input_dim, int_to_grade):
+    vec = np.zeros((1, input_dim), dtype=np.float32)
+    # you need pos2i mappings available globally or pass them
     for m in moves:
-        if m in pos2i_main: vec[0,pos2i_main[m]]=1
-        if m in pos2i_start: vec[0,len(dims_main)+pos2i_start[m]]=1
-        if m in pos2i_end: vec[0,len(dims_main)+len(dims_start)+pos2i_end[m]]=1
-    p=model.predict(vec)[0,0]
-    return p,int_to_grade[int(np.clip(round(p),0,len(gfont)-1))]
+        if m in pos2i_main:
+            vec[0, pos2i_main[m]] = 1
+        if m in pos2i_start:
+            vec[0, len(dims_main) + pos2i_start[m]] = 1
+        if m in pos2i_end:
+            vec[0, len(dims_main) + len(dims_start) + pos2i_end[m]] = 1
+    model.eval()
+    with torch.no_grad():
+        p = model(torch.from_numpy(vec).to(device)).item()
+    return p, int_to_grade[int(np.clip(round(p), 0, len(int_to_grade)-1))]
+
+if __name__ == '__main__':
+    train()

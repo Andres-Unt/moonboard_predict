@@ -16,6 +16,8 @@ dims_end = [f"{chr(65+c)}18" for c in range(11)]
 pos2i_main = {p:i for i,p in enumerate(dims_main)}
 pos2i_start = {p:i for i,p in enumerate(dims_start)}
 pos2i_end = {p:i for i,p in enumerate(dims_end)}
+h = 18
+w = 11
 
 def load_and_preprocess(path='moonboard_data.json'):
     # Load raw JSON
@@ -145,14 +147,14 @@ class GaussianNoise(nn.Module):
 class MoonModel(nn.Module):
     """
     2D-CNN according to the paper:
-    Input: (batch, features) reshaped to (batch, 1, 18, 11)
+    Input: (batch, features) reshaped to (batch, 1, h, w)
     Conv2D(32, kernel=3) -> ReLU -> BN
     Conv2D(32, kernel=3) -> ReLU -> BN
     Conv2D(64, kernel=3) -> ReLU -> BN
     Conv2D(64, kernel=3) -> ReLU -> BN
     Flatten -> Dense(32, relu) -> Dense(1, linear)
     """
-    def __init__(self, height=18, width=11):
+    def __init__(self, height=h, width=w):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(32)
@@ -169,7 +171,7 @@ class MoonModel(nn.Module):
     def forward(self, x):
         # x: (batch, features)
         b = x.size(0)
-        x = x.view(b, 1, 18, 11)
+        x = x.view(b, 1, h, w)
         x = F.relu(self.bn1(self.conv1(x)))
         x = F.relu(self.bn2(self.conv2(x)))
         x = F.relu(self.bn3(self.conv3(x)))
@@ -194,14 +196,15 @@ def train():
     X_train, y_train, X_val, y_val_aug, y_val, int_to_grade = load_and_preprocess()
     train_ds = MoonboardDataset(X_train, y_train)
     val_ds = MoonboardDataset(X_val, y_val_aug)
-    train_loader = DataLoader(train_ds, batch_size=128, shuffle=True)
+    train_loader = DataLoader(train_ds, batch_size=32, shuffle=True)
     val_loader = DataLoader(val_ds, batch_size=256)
 
-    model = MoonModel(X_train.shape[1]).to(device)
-    optimizer = optim.Adam(model.parameters())
+    model = model = MoonModel(height=h, width=w).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-3, weight_decay=3e-6)
+    # optimizer = optim.Adam(model.parameters())
 
     best_loss = float('inf')
-    patience, wait = 10, 0
+    patience, wait = 20, 0
     for epoch in range(1, 1001):
         model.train()
         for xb, yb in train_loader:

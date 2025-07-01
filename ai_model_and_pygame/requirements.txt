@@ -1,14 +1,7 @@
-tensorflow
-tf-keras
-keras
-keras-tuner
+tf-nightly
 scikit-learn
 matplotlib
 Pillow
 scipy
 scikit-image
-tensorflowjs
-numpy
 pygame
-argparse 
-

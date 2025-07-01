@@ -72,7 +72,8 @@ def load_and_preprocess(path='moonboard_data.json'):
     idx = np.random.permutation(N)
     s = int(0.8 * N)
     train_idx, val_idx = idx[:s], idx[s:]
-    X_tr, X_val = X_all[train_idx], X_all[val_idx]
+    # X_tr, X_val = X_all[train_idx], X_all[val_idx]
+    X_tr, X_val = X_main[train_idx], X_main[val_idx]
     y_tr, y_val = y[train_idx], y[val_idx]
 
     # Augmentation with counters
@@ -81,31 +82,31 @@ def load_and_preprocess(path='moonboard_data.json'):
     L_main = len(dims_main)
     L_start = len(dims_start)
     L_end = len(dims_end)
-    for xi, yi in zip(X_tr, y_tr):
-        main = xi[:L_main]
-        st = xi[L_main:L_main+L_start]
-        en = xi[-L_end:]
-        start_idxs = [pos2i_main[p] for p,i in pos2i_start.items() if st[i]]
-        end_idxs = [pos2i_main[p] for p,i in pos2i_end.items() if en[i]]
-        nonse = [i for i,v in enumerate(main) if v and i not in start_idxs+end_idxs]
-        for k in nonse:
-            x2 = xi.copy(); x2[k] = 0
-            aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
-            cnt_rem1 += 1
-        for a,b in combinations(nonse,2):
-            x2 = xi.copy(); x2[a] = x2[b] = 0
-            aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
-            cnt_rem2 += 1
-        for a,b,c in combinations(nonse,3):
-            x2 = xi.copy(); x2[a] = x2[b] = x2[c] = 0
-            aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
-            cnt_rem3 += 1
-        absent = [i for i,v in enumerate(main) if not v]
-        for k in absent:
-            if random.random() < 0.216:
-                x2 = xi.copy(); x2[k] = 1
-                aug_X.append(x2); aug_y.append(yi); aug_f.append(-1)
-                cnt_add += 1
+    # for xi, yi in zip(X_tr, y_tr):
+    #     main = xi[:L_main]
+    #     st = xi[L_main:L_main+L_start]
+    #     en = xi[-L_end:]
+    #     start_idxs = [pos2i_main[p] for p,i in pos2i_start.items() if st[i]]
+    #     end_idxs = [pos2i_main[p] for p,i in pos2i_end.items() if en[i]]
+    #     nonse = [i for i,v in enumerate(main) if v and i not in start_idxs+end_idxs]
+    #     for k in nonse:
+    #         x2 = xi.copy(); x2[k] = 0
+    #         aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
+    #         cnt_rem1 += 1
+    #     for a,b in combinations(nonse,2):
+    #         x2 = xi.copy(); x2[a] = x2[b] = 0
+    #         aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
+    #         cnt_rem2 += 1
+    #     for a,b,c in combinations(nonse,3):
+    #         x2 = xi.copy(); x2[a] = x2[b] = x2[c] = 0
+    #         aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
+    #         cnt_rem3 += 1
+    #     absent = [i for i,v in enumerate(main) if not v]
+    #     for k in absent:
+    #         if random.random() < 0.216:
+    #             x2 = xi.copy(); x2[k] = 1
+    #             aug_X.append(x2); aug_y.append(yi); aug_f.append(-1)
+    #             cnt_add += 1
     cnt_rem = cnt_rem1 + cnt_rem2 + cnt_rem3
     print(f"Augmentation stats: removals of 1 hold: {cnt_rem1}, 2 holds: {cnt_rem2}, 3 holds: {cnt_rem3}, additions: {cnt_add}")
     print(f"Total removals: {cnt_rem}, additions: {cnt_add}")
@@ -142,47 +143,40 @@ class GaussianNoise(nn.Module):
         return x
 
 class MoonModel(nn.Module):
-    def __init__(self, input_dim, emb_dim=64, n_heads=4, n_layers=2):
+    """
+    2D-CNN according to the paper:
+    Input: (batch, features) reshaped to (batch, 1, 18, 11)
+    Conv2D(32, kernel=3) -> ReLU -> BN
+    Conv2D(32, kernel=3) -> ReLU -> BN
+    Conv2D(64, kernel=3) -> ReLU -> BN
+    Conv2D(64, kernel=3) -> ReLU -> BN
+    Flatten -> Dense(32, relu) -> Dense(1, linear)
+    """
+    def __init__(self, height=18, width=11):
         super().__init__()
-        # Embedding per hold
-        self.embedding = nn.Embedding(input_dim, emb_dim)
-        # Transformer encoder with batch_first
-        encoder_layer = nn.TransformerEncoderLayer(d_model=emb_dim,
-                                                   nhead=n_heads,
-                                                   batch_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
-        # Gaussian noise on pooled features
-        self.noise = GaussianNoise(0.05)
-        # Final MLP head
-        self.head = nn.Sequential(
-            nn.Linear(emb_dim, 256),
-            nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.Linear(256, 15),
-            nn.Linear(15, 1)
-        )
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(32)
+        self.conv3 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(64)
+        self.conv4 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.bn4 = nn.BatchNorm2d(64)
+        flat_dim = 64 * height * width
+        self.fc1 = nn.Linear(flat_dim, 32)
+        self.fc2 = nn.Linear(32, 1)
 
     def forward(self, x):
-        # x: [B, N] binary indicators
-        B, N = x.shape
-        # Lookup embeddings: [B, N, emb_dim]
-        ids = torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)
-        seq = self.embedding(ids)
-        # Zero out embeddings for inactive holds
-        seq = seq * x.unsqueeze(-1)
-        # Create padding mask: True for positions to mask
-        pad_mask = (x == 0)
-        # Transformer expects [B, N, emb_dim] with batch_first
-        seq_enc = self.transformer(seq, src_key_padding_mask=pad_mask)
-        # Pooling: mean over active holds
-        mask = (~pad_mask).unsqueeze(-1)  # [B, N, 1]
-        summed = torch.sum(seq_enc * mask, dim=1)           # [B, emb_dim]
-        counts = torch.sum(mask, dim=1).clamp(min=1)        # [B, 1]
-        pooled = summed / counts                            # [B, emb_dim]
-        # Add noise and classify
-        h = self.noise(pooled)
-        out = self.head(h)
-        return out.squeeze(1)
+        # x: (batch, features)
+        b = x.size(0)
+        x = x.view(b, 1, 18, 11)
+        x = F.relu(self.bn1(self.conv1(x)))
+        x = F.relu(self.bn2(self.conv2(x)))
+        x = F.relu(self.bn3(self.conv3(x)))
+        x = F.relu(self.bn4(self.conv4(x)))
+        x = x.view(b, -1)
+        x = F.relu(self.fc1(x))
+        return self.fc2(x).squeeze(1)
 
 
 def one_sided_loss(y_true, y_pred):

@@ -89,9 +89,7 @@ def load_and_preprocess(path='moonboard_data.json'):
         end_idxs = [pos2i_main[p] for p,i in pos2i_end.items() if en[i]]
         nonse = [i for i,v in enumerate(main) if v and i not in start_idxs+end_idxs]
         for k in nonse:
-            # print('xi',xi)
             x2 = xi.copy(); x2[k] = 0
-            # print('x2',x2)
             aug_X.append(x2); aug_y.append(yi); aug_f.append(1)
             cnt_rem1 += 1
         for a,b in combinations(nonse,2):
@@ -144,23 +142,48 @@ class GaussianNoise(nn.Module):
         return x
 
 class MoonModel(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self, input_dim, emb_dim=64, n_heads=4, n_layers=2):
         super().__init__()
+        # Embedding per hold
+        self.embedding = nn.Embedding(input_dim, emb_dim)
+        # Transformer encoder with batch_first
+        encoder_layer = nn.TransformerEncoderLayer(d_model=emb_dim,
+                                                   nhead=n_heads,
+                                                   batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        # Gaussian noise on pooled features
         self.noise = GaussianNoise(0.05)
-        layers = []
-        M = 512
-        dim = input_dim
-        for _ in range(2):
-            layers.append(nn.Linear(dim, M))
-            layers.append(nn.ReLU())
-            layers.append(nn.Dropout(0.3))
-            dim = M 
-        layers.append(nn.Linear(dim, 15))
-        layers.append(nn.Linear(15, 1))
-        self.net = nn.Sequential(self.noise, *layers)
+        # Final MLP head
+        self.head = nn.Sequential(
+            nn.Linear(emb_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 15),
+            nn.Linear(15, 1)
+        )
 
     def forward(self, x):
-        return self.net(x).squeeze(1)
+        # x: [B, N] binary indicators
+        B, N = x.shape
+        # Lookup embeddings: [B, N, emb_dim]
+        ids = torch.arange(N, device=x.device).unsqueeze(0).expand(B, -1)
+        seq = self.embedding(ids)
+        # Zero out embeddings for inactive holds
+        seq = seq * x.unsqueeze(-1)
+        # Create padding mask: True for positions to mask
+        pad_mask = (x == 0)
+        # Transformer expects [B, N, emb_dim] with batch_first
+        seq_enc = self.transformer(seq, src_key_padding_mask=pad_mask)
+        # Pooling: mean over active holds
+        mask = (~pad_mask).unsqueeze(-1)  # [B, N, 1]
+        summed = torch.sum(seq_enc * mask, dim=1)           # [B, emb_dim]
+        counts = torch.sum(mask, dim=1).clamp(min=1)        # [B, 1]
+        pooled = summed / counts                            # [B, emb_dim]
+        # Add noise and classify
+        h = self.noise(pooled)
+        out = self.head(h)
+        return out.squeeze(1)
+
 
 def one_sided_loss(y_true, y_pred):
     grade = y_true[:,0]

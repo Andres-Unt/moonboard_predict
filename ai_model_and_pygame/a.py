@@ -148,13 +148,7 @@ class MoonModel(nn.Module):
         super().__init__()
         self.noise = GaussianNoise(0.05)
         layers = []
-        # layers.append(nn.Linear(input_dim, 2048))
-        # layers.append(nn.ReLU())
-        # layers.append(nn.Dropout(0.3))
         M = 512
-        # layers.append(nn.Linear(2048, M))
-        # layers.append(nn.ReLU())
-        # layers.append(nn.Dropout(0.3))
         dim = input_dim
         for _ in range(2):
             layers.append(nn.Linear(dim, M))

@@ -1,103 +1,100 @@
-import argparse
+
+import sys
+import pygame
 import numpy as np
-import tensorflow as tf
-import os
-from tensorflow.keras.models import load_model
+import scipy.ndimage
+from PIL import Image
+from skimage import measure
+from collections import defaultdict
+import torch
+import json
+from a import MoonModel
 
-# Grade labels
-GFONT = [
-    '6A+','6B','6B+','6C','6C+',
-    '7A','7A+','7B','7B+','7C',
-    '7C+','8A','8A+','8B','8B+',
-]
-INT_TO_GRADE = {i: g for i, g in enumerate(GFONT)}
+# ── Config ─────────────────────────────────────────────────────────────────────
+MOON_IMG_PATH  = "moon.png"
+STEP2_IMG_PATH = "step_2.png"
+COLS, ROWS    = 11, 18
+D_OUTLINE     = 10
+LABEL_PT      = 24
+SELECT_PT     = 20
+BOTTOM_PAD    = 0
+RIGHT_PAD     = 200
 
-# Define dimensions for encoding
-MAIN_DIMS = [f"{chr(ord('A')+c)}{r}" for c in range(11) for r in range(1,19)]
-START_DIMS = [f"{chr(ord('A')+c)}{r}" for c in range(11) for r in range(1,7)]
-END_DIMS = [f"{chr(ord('A')+c)}18" for c in range(13)]
-POS2I_MAIN = {p: i for i, p in enumerate(MAIN_DIMS)}
-POS2I_START = {p: i for i, p in enumerate(START_DIMS)}
-POS2I_END = {p: i for i, p in enumerate(END_DIMS)}
+# ── Load PyTorch model ─────────────────────────────────────────────────────────
+state_path = "moonboard_model.pth"
+try:
+    # Attempt to load a full saved model or state dict
+    state = torch.load(state_path, map_location='cpu')
+except Exception as e:
+    print(f"Failed to load model file: {e}")
+    sys.exit(1)
 
-# Load the trained model (ensure the model file path is correct)
-MODEL_PATH = 'moonboard_model.keras'
-model = load_model(MODEL_PATH)
+if isinstance(state, torch.nn.Module):
+    # User saved entire model
+    model = state
+elif isinstance(state, dict):
+    # User saved state_dict or a dict containing state_dict
+    # If it contains a 'model_state_dict' key, extract it
+    sd = state.get('model_state_dict', state)
+    # Dynamically infer architecture? Attempt load with strict=False
+    # User must define GradeNet matching this state_dict elsewhere if necessary
+    model = MoonModel()
+    model.load_state_dict(sd)
+else:
+    print("Unrecognized model format in .pth file.")
+    sys.exit(1)
 
+model.eval()
 
-def encode_holds(holds):
-    """
-    Encode a list of holds into model input vectors.
-    Input holds are case insensitive, with optional 's' (start) or 't' (finish) suffix.
-    """
-    vec_main = np.zeros((1, len(MAIN_DIMS)), dtype=np.float32)
-    vec_start = np.zeros((1, len(START_DIMS)), dtype=np.float32)
-    vec_end = np.zeros((1, len(END_DIMS)), dtype=np.float32)
+# ── Inference helper ────────────────────────────────────────────────────────────
+def prepare_input(names, name_to_lab, ROWS, COLS):
+    code_map = {'on': 1.0, 'start': 2.0, 'top': 3.0}
+    x = torch.zeros(ROWS * COLS, dtype=torch.float32)
+    for nm in names:
+        if nm.endswith('s'):
+            base, state = nm[:-1], 'start'
+        elif nm.endswith('t'):
+            base, state = nm[:-1], 'top'
+        else:
+            base, state = nm, 'on'
+        lab = name_to_lab.get(base)
+        if lab is not None:
+            x[lab - 1] = code_map[state]
+    return x.unsqueeze(0)
 
-    for raw in holds:
-        h = raw.strip().upper()
-        is_start = False
-        is_end = False
-        if h.endswith('S'):
-            is_start = True
-            h = h[:-1]
-        elif h.endswith('T'):
-            is_end = True
-            h = h[:-1]
+# ── Load UI mapping ────────────────────────────────────────────────────────────
+with open("public/ui_map.json") as f:
+    ui = json.load(f)
+name_to_lab = ui['name_to_lab']
 
-        # Only consider valid positions
-        if h in POS2I_MAIN:
-            vec_main[0, POS2I_MAIN[h]] = 1
-        if is_start and h in POS2I_START:
-            vec_start[0, POS2I_START[h]] = 1
-        if is_end and h in POS2I_END:
-            vec_end[0, POS2I_END[h]] = 1
-
-    # Concatenate features
-    print('start',vec_start)
-    print('end',vec_end)
-    print('main',vec_main)
-    return np.concatenate([vec_main, vec_start, vec_end], axis=1)
-
-
-def predict_grade(holds):
-    """
-    Given a list of holds, returns a tuple (numeric_prediction, grade_label).
-    Numeric prediction is a float; grade_label is the closest graded string.
-    """
-    x = encode_holds(holds)
-    p = model.predict(x, verbose=0)[0, 0]
-    # Round to nearest integer index, clip to valid range
-    idx = int(np.clip(np.rint(p), 0, len(GFONT)-1))
-    label = INT_TO_GRADE[idx]
-
-# save and exit
-    model_json = model.to_json()
-    with open("moonboard_model.json", "w") as f:
-        f.write(model_json)
-    
-    os.makedirs("weights", exist_ok=True)
-    for i, layer in enumerate(model.layers):
-        weights = layer.get_weights()
-        for j, w in enumerate(weights):
-            np.save(f"weights/layer_{i}_weight_{j}.npy", w)
-
-    return p, label
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description='Predict MoonBoard grade from holds sequence'
-    )
-    parser.add_argument(
-        'holds', nargs='+', help="List of holds (e.g. B18 F6s D18t)"
-    )
-    args = parser.parse_args()
-    pred_value, pred_label = predict_grade(args.holds)
-    print('holds', args.holds)
-    print(f"Predicted numeric grade: {pred_value:.2f}")
-    print(f"Closest grade label : {pred_label}")
-
-
+# CLI entrypoint
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) < 2:
+        print("Usage: python grade_inference.py <hold1> [hold2] ...")
+        sys.exit(1)
+    names = [nm.upper() for nm in sys.argv[1:]]
+    x = prepare_input(names, name_to_lab, ROWS, COLS)
+    with torch.no_grad():
+        out = model(x) if hasattr(model, 'forward') else model(x)
+    # Handle outputs flexibly
+    if out.ndim == 2 and out.size(1) >= 1:
+        score = out[0, 0].item()
+        class_idx = int(out[0, 1].item()) if out.size(1) > 1 else None
+    elif out.ndim == 1:
+        score = out[0].item()
+        class_idx = None
+    else:
+        print("Unexpected model output shape:", out.shape)
+        sys.exit(1)
+
+    # Map class_idx to name if available
+    try:
+        from grade_inference import CLASS_NAMES
+        g_name = CLASS_NAMES[class_idx] if class_idx is not None else ''
+    except ImportError:
+        g_name = str(class_idx) if class_idx is not None else ''
+
+    if class_idx is not None:
+        print(f"Grade: {g_name} ({score:.2f})")
+    else:
+        print(f"Score: {score:.2f}")
